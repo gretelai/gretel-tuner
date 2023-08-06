@@ -40,14 +40,10 @@ def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold
     drop_columns = drop_columns or []
     features = dataframe.drop(columns=[target_column] + list(drop_columns))
 
-    # Identify data types for each column
     numeric_cols = features.select_dtypes(include=["number"]).columns
     categorical_cols = features.select_dtypes(include=["object", "category"]).columns
 
-    # Identify high cardinality categorical columns
     high_cardinality_cols = [col for col in categorical_cols if features[col].nunique() > cardinality_threshold]
-
-    # Remove high cardinality columns from categorical_cols
     categorical_cols = list(set(categorical_cols) - set(high_cardinality_cols))
 
     numerical_pipeline = Pipeline(
@@ -59,7 +55,6 @@ def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold
 
     categorical_pipeline = Pipeline([("imputer", SimpleImputer(strategy="most_frequent")), ("ohe", OneHotEncoder())])
 
-    # Create the column transformer to handle numeric, low cardinality, and high cardinality categorical features
     preprocessor = ColumnTransformer(
         transformers=[
             ("numeric", numerical_pipeline, numeric_cols),
@@ -69,7 +64,6 @@ def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold
         remainder="drop",
     )
 
-    # Build the final pipeline with the preprocessor and a machine learning model (e.g., RandomForestClassifier)
     pipeline = Pipeline([("preprocessor", preprocessor)])
 
     return pipeline
