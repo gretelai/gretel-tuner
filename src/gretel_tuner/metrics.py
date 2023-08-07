@@ -102,26 +102,19 @@ class MinorityBoostingMetric(BaseTunerMetric):
 
     def __call__(self, model):
         df_synth = self.generate_synthetic_minority(model)
-        multi_class = "ovr" if self.is_multi_class else "raise"
 
-        results_boosted = measure_ml_utility(
+        ml_utility_kwargs = dict(
             df_real=self.df_train,
             df_holdout=self.df_holdout,
             target_column=self.target_column,
-            df_boost=df_synth,
             drop_columns=self.drop_columns,
-            multi_class=multi_class,
+            is_multi_class=self.is_multi_class,
         )
 
         if self.results_no_boost is None:
-            self.results_no_boost = measure_ml_utility(
-                df_real=self.df_train,
-                df_holdout=self.df_holdout,
-                target_column=self.target_column,
-                df_boost=None,
-                drop_columns=self.drop_columns,
-                multi_class=multi_class,
-            )
+            self.results_no_boost = measure_ml_utility(df_boost=None, **ml_utility_kwargs)
+
+        results_boosted = measure_ml_utility(df_boost=df_synth, **ml_utility_kwargs)
 
         df_results = pd.concat(
             [self.results_no_boost.get_scores(as_dataframe=True), results_boosted.get_scores(as_dataframe=True)],

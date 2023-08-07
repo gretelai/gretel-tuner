@@ -74,27 +74,33 @@ def measure_ml_utility(
     df_boost=None,
     n_splits=3,
     drop_columns=None,
-    multi_class="raise",
+    is_multi_class=False,
     param_grid=None,
 ):
+    df_ref = df_real.copy()
+
     param_grid = param_grid or {
         "n_estimators": [10, 100],
         "min_samples_split": [2, 6],
         "min_samples_leaf": [1, 4],
     }
-    grid_search = ParameterGrid(param_grid)
-    preproc = build_preprocessing_pipeline(df_real, target_column, drop_columns=drop_columns)
 
+    preproc = build_preprocessing_pipeline(df_ref, target_column, drop_columns=drop_columns)
     df_boost_split = None if df_boost is None else [d for d in np.array_split(df_boost.sample(frac=1), n_splits)]
+
+    multi_class = "ovr" if is_multi_class else "raise"
+    score_average = "weighted" if is_multi_class else "binary"
+    auc_average = "weighted" if is_multi_class else "macro"
     boost_desc = "" if df_boost is None else " with boosted minority"
 
     param_scores = []
+    grid_search = ParameterGrid(param_grid)
     skf = StratifiedKFold(n_splits=n_splits)
     for params in tqdm(grid_search, total=len(grid_search), desc=f"ML utility - Performing grid search{boost_desc}"):
         cv_scores = []
-        for split_i, (train_index, test_index) in enumerate(skf.split(df_real, df_real[target_column])):
-            df_train = df_real.iloc[train_index]
-            df_valid = df_real.iloc[test_index]
+        for split_i, (train_index, test_index) in enumerate(skf.split(df_ref, df_ref[target_column])):
+            df_train = df_ref.iloc[train_index]
+            df_valid = df_ref.iloc[test_index]
 
             preproc.fit(df_train, df_train[target_column].astype("category").cat.codes.to_numpy())
 
@@ -109,14 +115,15 @@ def measure_ml_utility(
 
             X_valid = preproc.transform(df_valid)
             y_valid = df_valid[target_column].astype("category").cat.codes.to_numpy()
-            y_proba = clf.predict_proba(X_valid)[:, 1] if multi_class == "raise" else clf.predict_proba(X_valid)
-            cv_scores.append(ml_metrics.roc_auc_score(y_valid, y_proba, multi_class=multi_class))
+            y_proba = clf.predict_proba(X_valid) if is_multi_class else clf.predict_proba(X_valid)[:, 1]
+
+            cv_scores.append(ml_metrics.roc_auc_score(y_valid, y_proba, multi_class=multi_class, average=auc_average))
 
         param_scores.append(np.mean(cv_scores))
 
-    preproc.fit(df_real, df_real[target_column].astype("category").cat.codes.to_numpy())
+    preproc.fit(df_ref, df_ref[target_column].astype("category").cat.codes.to_numpy())
 
-    df_train = df_real if df_boost is None else pd.concat([df_real, df_boost], ignore_index=True)
+    df_train = df_ref if df_boost is None else pd.concat([df_ref, df_boost], ignore_index=True)
 
     X_train = preproc.transform(df_train)
     y_train = df_train[target_column].astype("category").cat.codes.to_numpy()
@@ -132,14 +139,13 @@ def measure_ml_utility(
 
     X_test = preproc.transform(df_holdout)
     y_test = df_holdout[target_column].astype("category").cat.codes.to_numpy()
-    y_proba = clf.predict_proba(X_test)[:, 1] if multi_class == "raise" else clf.predict_proba(X_test)
-    average = "binary" if multi_class == "raise" else "weighted"
+    y_proba = clf.predict_proba(X_test) if is_multi_class else clf.predict_proba(X_test)[:, 1]
 
     return MLResults(
         clf=clf,
-        roc_auc=ml_metrics.roc_auc_score(y_test, y_proba, multi_class=multi_class),
-        f1=ml_metrics.f1_score(y_test, clf.predict(X_test), average=average),
-        precision=ml_metrics.precision_score(y_test, clf.predict(X_test), average=average),
-        recall=ml_metrics.recall_score(y_test, clf.predict(X_test), average=average),
+        roc_auc=ml_metrics.roc_auc_score(y_test, y_proba, multi_class=multi_class, average=auc_average),
+        f1=ml_metrics.f1_score(y_test, clf.predict(X_test), average=score_average),
+        precision=ml_metrics.precision_score(y_test, clf.predict(X_test), average=score_average),
+        recall=ml_metrics.recall_score(y_test, clf.predict(X_test), average=score_average),
         accuracy=ml_metrics.accuracy_score(y_test, clf.predict(X_test)),
     )
