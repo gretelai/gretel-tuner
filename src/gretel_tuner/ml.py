@@ -29,6 +29,7 @@ class MLResults:
     recall: float
     f1: float
     accuracy: float
+    hyperparameters: dict
 
     def get_scores(self, as_dataframe=False):
         scores = {
@@ -43,6 +44,7 @@ class MLResults:
 
 def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold=25, drop_columns=None):
     drop_columns = drop_columns or []
+
     logger.info(f"ML utility - Dropping columns: {drop_columns}")
     features = dataframe.drop(columns=[target_column] + list(drop_columns))
 
@@ -55,16 +57,17 @@ def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold
     numerical_pipeline = Pipeline([("scaler", StandardScaler()), ("imputer", SimpleImputer(strategy="median"))])
     categorical_pipeline = Pipeline([("imputer", SimpleImputer(strategy="most_frequent")), ("ohe", OneHotEncoder())])
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("numeric", numerical_pipeline, numeric_cols),
-            ("categorical", categorical_pipeline, categorical_cols),
-            ("target_encoder", TargetEncoder(handle_missing="value", handle_unknown="value"), high_cardinality_cols),
-        ],
-        remainder="drop",
-    )
+    transformers = [
+        ("numeric", numerical_pipeline, numeric_cols),
+        ("categorical", categorical_pipeline, categorical_cols),
+    ]
 
-    return preprocessor
+    if len(high_cardinality_cols) > 0:
+        transformers.append(
+            ("target_encoder", TargetEncoder(handle_missing="value", handle_unknown="value"), high_cardinality_cols)
+        )
+
+    return ColumnTransformer(transformers=transformers, remainder="drop")
 
 
 def measure_ml_utility(
@@ -121,31 +124,37 @@ def measure_ml_utility(
 
         param_scores.append(np.mean(cv_scores))
 
+    best_params = grid_search[np.argmax(param_scores)]
+    logger.info(
+        "ML utility - Grid search complete. RF hyperparameters:\n"
+        + tabulate(pd.DataFrame(best_params, index=[0]), headers="keys", tablefmt="grid", showindex=False)
+        + "\n"
+    )
+
     preproc.fit(df_ref, df_ref[target_column].astype("category").cat.codes.to_numpy())
 
     df_train = df_ref if df_boost is None else pd.concat([df_ref, df_boost], ignore_index=True)
+    logger.info(f"ML utility - Final training on {len(df_train)} samples")
+    logger.info(f"ML utility - len(real) = {len(df_ref)}, len(boost) = {len([] if df_boost is None else df_boost)}")
 
     X_train = preproc.transform(df_train)
     y_train = df_train[target_column].astype("category").cat.codes.to_numpy()
 
-    best_params = grid_search[np.argmax(param_scores)]
-    logger.info(
-        "ML utility - RF hyperparameters:\n"
-        + tabulate(pd.DataFrame(best_params, index=[0]), headers="keys", tablefmt="grid", showindex=False)
-        + "\n"
-    )
     clf = RandomForestClassifier(**best_params)
     clf.fit(X_train, y_train)
 
     X_test = preproc.transform(df_holdout)
     y_test = df_holdout[target_column].astype("category").cat.codes.to_numpy()
+
+    y_pred = clf.predict(X_test)
     y_proba = clf.predict_proba(X_test) if is_multi_class else clf.predict_proba(X_test)[:, 1]
 
     return MLResults(
         clf=clf,
         roc_auc=ml_metrics.roc_auc_score(y_test, y_proba, multi_class=multi_class, average=auc_average),
-        f1=ml_metrics.f1_score(y_test, clf.predict(X_test), average=score_average),
-        precision=ml_metrics.precision_score(y_test, clf.predict(X_test), average=score_average),
-        recall=ml_metrics.recall_score(y_test, clf.predict(X_test), average=score_average),
-        accuracy=ml_metrics.accuracy_score(y_test, clf.predict(X_test)),
+        f1=ml_metrics.f1_score(y_test, y_pred, average=score_average),
+        precision=ml_metrics.precision_score(y_test, y_pred, average=score_average),
+        recall=ml_metrics.recall_score(y_test, y_pred, average=score_average),
+        accuracy=ml_metrics.accuracy_score(y_test, y_pred),
+        hyperparameters=best_params,
     )

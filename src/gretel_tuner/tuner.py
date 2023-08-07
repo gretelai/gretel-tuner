@@ -80,6 +80,7 @@ class GretelHyperParameterTuner:
         trial_config = self._get_trial_config(trial)
 
         try:
+            trial_config["name"] = f"{trial_config['name']}-optuna-{trial.number}"
             model = self.project.create_model_obj(trial_config, data_source=self.artifact_id)
             model.submit()
             gretel.helpers.poll(model, verbose=False)
