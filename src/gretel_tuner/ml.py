@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -11,9 +12,13 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import ParameterGrid, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from tabulate import tabulate
 from tqdm import tqdm
 
 __all__ = ["build_preprocessing_pipeline", "measure_ml_utility"]
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +43,7 @@ class MLResults:
 
 def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold=25, drop_columns=None):
     drop_columns = drop_columns or []
+    logger.info(f"ML utility - Dropping columns: {drop_columns}")
     features = dataframe.drop(columns=[target_column] + list(drop_columns))
 
     numeric_cols = features.select_dtypes(include=["number"]).columns
@@ -46,13 +52,7 @@ def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold
     high_cardinality_cols = [col for col in categorical_cols if features[col].nunique() > cardinality_threshold]
     categorical_cols = list(set(categorical_cols) - set(high_cardinality_cols))
 
-    numerical_pipeline = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-        ]
-    )
-
+    numerical_pipeline = Pipeline([("scaler", StandardScaler()), ("imputer", SimpleImputer(strategy="median"))])
     categorical_pipeline = Pipeline([("imputer", SimpleImputer(strategy="most_frequent")), ("ohe", OneHotEncoder())])
 
     preprocessor = ColumnTransformer(
@@ -64,31 +64,35 @@ def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold
         remainder="drop",
     )
 
-    pipeline = Pipeline([("preprocessor", preprocessor)])
-
-    return pipeline
+    return preprocessor
 
 
 def measure_ml_utility(
-    df_real, df_holdout, target_column, df_boost=None, n_splits=3, drop_columns=None, multi_class="raise"
+    df_real,
+    df_holdout,
+    target_column,
+    df_boost=None,
+    n_splits=3,
+    drop_columns=None,
+    multi_class="raise",
+    param_grid=None,
 ):
-    param_grid = {
+    param_grid = param_grid or {
         "n_estimators": [10, 100],
         "min_samples_split": [2, 6],
         "min_samples_leaf": [1, 4],
     }
-    param_scores = []
     grid_search = ParameterGrid(param_grid)
     preproc = build_preprocessing_pipeline(df_real, target_column, drop_columns=drop_columns)
 
     df_boost_split = None if df_boost is None else [d for d in np.array_split(df_boost.sample(frac=1), n_splits)]
     boost_desc = "" if df_boost is None else " with boosted minority"
 
-    for params in tqdm(grid_search, total=len(grid_search), desc=f"ML utility: Performing grid search{boost_desc}"):
+    param_scores = []
+    skf = StratifiedKFold(n_splits=n_splits)
+    for params in tqdm(grid_search, total=len(grid_search), desc=f"ML utility - Performing grid search{boost_desc}"):
         cv_scores = []
-        for split_i, (train_index, test_index) in enumerate(
-            StratifiedKFold(n_splits=n_splits).split(df_real, df_real[target_column])
-        ):
+        for split_i, (train_index, test_index) in enumerate(skf.split(df_real, df_real[target_column])):
             df_train = df_real.iloc[train_index]
             df_valid = df_real.iloc[test_index]
 
@@ -117,7 +121,13 @@ def measure_ml_utility(
     X_train = preproc.transform(df_train)
     y_train = df_train[target_column].astype("category").cat.codes.to_numpy()
 
-    clf = RandomForestClassifier(**grid_search[np.argmax(param_scores)])
+    best_params = grid_search[np.argmax(param_scores)]
+    logger.info(
+        "ML utility - RF hyperparameters:\n"
+        + tabulate(pd.DataFrame(best_params, index=[0]), headers="keys", tablefmt="grid", showindex=False)
+        + "\n"
+    )
+    clf = RandomForestClassifier(**best_params)
     clf.fit(X_train, y_train)
 
     X_test = preproc.transform(df_holdout)

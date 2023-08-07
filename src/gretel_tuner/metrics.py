@@ -88,19 +88,12 @@ class SDMetricsScore(GretelReportBasedMetric):
 class MinorityBoostingMetric(BaseTunerMetric):
     is_multi_class = False
 
-    def __init__(
-        self,
-        df_train,
-        df_holdout,
-        target_column,
-        ml_metric="roc_auc",
-        drop_id_columns=True,
-    ):
+    def __init__(self, df_train, df_holdout, target_column, ml_metric="roc_auc", drop_columns=None):
         self.df_train = df_train
         self.df_holdout = df_holdout
         self.target_column = target_column
         self.ml_metric = ml_metric
-        self.drop_id_columns = drop_id_columns
+        self.drop_columns = drop_columns
         self.results_no_boost = None
 
     @abstractmethod
@@ -108,25 +101,15 @@ class MinorityBoostingMetric(BaseTunerMetric):
         ...
 
     def __call__(self, model):
-        if self.drop_id_columns:
-            drop_columns = [
-                c
-                for c in self.df_train.select_dtypes(include=["O", "int"]).columns
-                if self.df_train[c].nunique() == len(self.df_train)
-            ]
-            logger.info(f"Dropping ID columns: {drop_columns}")
-        else:
-            drop_columns = None
-
         df_synth = self.generate_synthetic_minority(model)
-        multi_class = "ovo" if self.is_multi_class else "raise"
+        multi_class = "ovr" if self.is_multi_class else "raise"
 
         results_boosted = measure_ml_utility(
             df_real=self.df_train,
             df_holdout=self.df_holdout,
             target_column=self.target_column,
             df_boost=df_synth,
-            drop_columns=drop_columns,
+            drop_columns=self.drop_columns,
             multi_class=multi_class,
         )
 
@@ -136,7 +119,7 @@ class MinorityBoostingMetric(BaseTunerMetric):
                 df_holdout=self.df_holdout,
                 target_column=self.target_column,
                 df_boost=None,
-                drop_columns=drop_columns,
+                drop_columns=self.drop_columns,
                 multi_class=multi_class,
             )
 
@@ -146,7 +129,7 @@ class MinorityBoostingMetric(BaseTunerMetric):
         )
         df_results["with synths"] = ["no", "yes"]
 
-        logger.info("\n\n" + tabulate(df_results, headers="keys", tablefmt="grid", showindex=False) + "\n")
+        logger.info("\n" + tabulate(df_results, headers="keys", tablefmt="grid", showindex=False))
 
         score = results_boosted.get_scores()[self.ml_metric.lower()]
         logger.info(f"Optimization metric score: {self.ml_metric} = {score:.4f}\n")
@@ -163,14 +146,14 @@ class BinaryMinorityBoostMetric(MinorityBoostingMetric):
         minority_class,
         boost_number,
         ml_metric="roc_auc",
-        drop_id_columns=True,
+        drop_columns=None,
     ):
         super().__init__(
             df_train=df_train,
             df_holdout=df_holdout,
             target_column=target_column,
             ml_metric=ml_metric,
-            drop_id_columns=drop_id_columns,
+            drop_columns=drop_columns,
         )
         self.boost_number = boost_number
         self.minority_class = minority_class
@@ -194,14 +177,14 @@ class MultiClassMinorityBoostMetric(MinorityBoostingMetric):
         minority_classes,
         boost_numbers,
         ml_metric="roc_auc",
-        drop_id_columns=True,
+        drop_columns=None,
     ):
         super().__init__(
             df_train=df_train,
             df_holdout=df_holdout,
             target_column=target_column,
             ml_metric=ml_metric,
-            drop_id_columns=drop_id_columns,
+            drop_columns=drop_columns,
         )
         self.boost_numbers = boost_numbers
         self.minority_classes = minority_classes
