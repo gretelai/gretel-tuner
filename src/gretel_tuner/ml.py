@@ -69,7 +69,9 @@ def build_preprocessing_pipeline(dataframe, target_column, cardinality_threshold
     return pipeline
 
 
-def measure_ml_utility(df_real, df_holdout, target_column, df_boost=None, n_splits=3, drop_columns=None):
+def measure_ml_utility(
+    df_real, df_holdout, target_column, df_boost=None, n_splits=3, drop_columns=None, multi_class="raise"
+):
     param_grid = {
         "n_estimators": [10, 100],
         "min_samples_split": [2, 6],
@@ -103,7 +105,8 @@ def measure_ml_utility(df_real, df_holdout, target_column, df_boost=None, n_spli
 
             X_valid = preproc.transform(df_valid)
             y_valid = df_valid[target_column].astype("category").cat.codes.to_numpy()
-            cv_scores.append(ml_metrics.roc_auc_score(y_valid, clf.predict_proba(X_valid)[:, 1]))
+            y_proba = clf.predict_proba(X_valid)[:, 1] if multi_class == "raise" else clf.predict_proba(X_valid)
+            cv_scores.append(ml_metrics.roc_auc_score(y_valid, y_proba, multi_class=multi_class))
 
         param_scores.append(np.mean(cv_scores))
 
@@ -119,12 +122,14 @@ def measure_ml_utility(df_real, df_holdout, target_column, df_boost=None, n_spli
 
     X_test = preproc.transform(df_holdout)
     y_test = df_holdout[target_column].astype("category").cat.codes.to_numpy()
+    y_proba = clf.predict_proba(X_test)[:, 1] if multi_class == "raise" else clf.predict_proba(X_test)
+    average = "binary" if multi_class == "raise" else "weighted"
 
     return MLResults(
         clf=clf,
-        roc_auc=ml_metrics.roc_auc_score(y_test, clf.predict_proba(X_test)[:, 1]),
-        f1=ml_metrics.f1_score(y_test, clf.predict(X_test)),
-        precision=ml_metrics.precision_score(y_test, clf.predict(X_test)),
-        recall=ml_metrics.recall_score(y_test, clf.predict(X_test)),
+        roc_auc=ml_metrics.roc_auc_score(y_test, y_proba, multi_class=multi_class),
+        f1=ml_metrics.f1_score(y_test, clf.predict(X_test), average=average),
+        precision=ml_metrics.precision_score(y_test, clf.predict(X_test), average=average),
+        recall=ml_metrics.recall_score(y_test, clf.predict(X_test), average=average),
         accuracy=ml_metrics.accuracy_score(y_test, clf.predict(X_test)),
     )
