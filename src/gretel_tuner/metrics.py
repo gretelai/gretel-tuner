@@ -13,7 +13,6 @@ from .ml import measure_ml_utility
 
 __all__ = [
     "BaseTunerMetric",
-    "GretelReportBasedMetric",
     "GretelSQSMetric",
     "SDMetricsScore",
     "BinaryMinorityBoostMetric",
@@ -26,26 +25,18 @@ logger = logging.getLogger(__name__)
 
 
 class BaseTunerMetric(ABC):
+    def __init__(self, client=None):
+        self.client = client
+
     @property
     def name(self):
         return self.__class__.__name__
 
-    @abstractmethod
-    def __call__(self, model: gretel.projects.models.Model) -> float:
-        """Calculate the optimization metric and return the score as a float."""
-
-
-class GretelReportBasedMetric(BaseTunerMetric):
-    def __init__(self, client=None):
-        self.client = client
-
     def _get_gretel_report(self, model: gretel.projects.models.Model):
         if self.client is None and "azure:" in model.project.client_config.artifact_endpoint:
             raise Exception("A client object must be provided at initialization for Azure hybrid runs.")
-        transport_params = {"client": self.client} if self.client else {}
-        with smart_open.open(
-            model.get_artifact_link("report_json"), mode="rb", transport_params=transport_params
-        ) as json_file:
+        tp = {"client": self.client} if self.client else {}
+        with smart_open.open(model.get_artifact_link("report_json"), mode="rb", transport_params=tp) as json_file:
             report = json.load(json_file)
         return report
 
@@ -54,12 +45,12 @@ class GretelReportBasedMetric(BaseTunerMetric):
         """Calculate the optimization metric and return the score as a float."""
 
 
-class GretelSQSMetric(GretelReportBasedMetric):
+class GretelSQSMetric(BaseTunerMetric):
     def __call__(self, model: gretel.projects.models.Model) -> float:
         return self._get_gretel_report(model)["synthetic_data_quality_score"]["raw_score"]
 
 
-class SDMetricsScore(GretelReportBasedMetric):
+class SDMetricsScore(BaseTunerMetric):
     _gretel_to_sdtype = {
         "numeric": "numerical",
         "categorical": "categorical",
@@ -71,6 +62,12 @@ class SDMetricsScore(GretelReportBasedMetric):
         super().__init__(client)
         self.df_real = df_real.copy()
 
+    def _get_synthetic_data(self, model: gretel.projects.models.Model) -> pd.DataFrame:
+        tp = {"client": self.client} if self.client else {}
+        with smart_open.open(model.get_artifact_link("data_preview"), mode="rb", transport_params=tp) as file_in:
+            df_synth = pd.read_csv(file_in)
+        return df_synth
+
     def __call__(self, model: gretel.projects.models.Model):
         gretel_report = self._get_gretel_report(model)
         metadata = {
@@ -79,8 +76,8 @@ class SDMetricsScore(GretelReportBasedMetric):
                 for f in gretel_report["fields"]
             }
         }
-        df_synth = pd.read_csv(model.get_artifact_link("data_preview"), compression="gzip")
         sdmetrics_report = QualityReport()
+        df_synth = self._get_synthetic_data(model)
         sdmetrics_report.generate(self.df_real, df_synth, metadata)
         return sdmetrics_report.get_score()
 
@@ -88,13 +85,20 @@ class SDMetricsScore(GretelReportBasedMetric):
 class MinorityBoostingMetric(BaseTunerMetric):
     is_multi_class = False
 
-    def __init__(self, df_train, df_holdout, target_column, ml_metric="roc_auc", drop_columns=None):
+    def __init__(self, df_train, df_holdout, target_column, ml_metric="roc_auc", drop_columns=None, client=None):
         self.df_train = df_train
         self.df_holdout = df_holdout
         self.target_column = target_column
         self.ml_metric = ml_metric
         self.drop_columns = drop_columns
         self.results_no_boost = None
+        super().__init__(client)
+
+    def _get_synthetic_data(self, rh: gretel.projects.records.RecordHandler) -> pd.DataFrame:
+        tp = {"client": self.client} if self.client else {}
+        with smart_open.open(rh.get_artifact_link("data"), mode="rb", transport_params=tp) as file_in:
+            df_synth = pd.read_csv(file_in)
+        return df_synth
 
     @abstractmethod
     def generate_synthetic_minority(self, model: gretel.projects.models.Model) -> pd.DataFrame:
@@ -140,6 +144,7 @@ class BinaryMinorityBoostMetric(MinorityBoostingMetric):
         boost_number,
         ml_metric="roc_auc",
         drop_columns=None,
+        client=None,
     ):
         super().__init__(
             df_train=df_train,
@@ -147,6 +152,7 @@ class BinaryMinorityBoostMetric(MinorityBoostingMetric):
             target_column=target_column,
             ml_metric=ml_metric,
             drop_columns=drop_columns,
+            client=client,
         )
         self.boost_number = boost_number
         self.minority_class = minority_class
@@ -156,7 +162,7 @@ class BinaryMinorityBoostMetric(MinorityBoostingMetric):
         record_handler = model.create_record_handler_obj(data_source=seeds, params={"num_records": len(seeds)})
         record_handler.submit()
         gretel.helpers.poll(record_handler, verbose=False)
-        return pd.read_csv(record_handler.get_artifact_link("data"), compression="gzip")
+        return self._get_synthetic_data(record_handler)
 
 
 class MultiClassMinorityBoostMetric(MinorityBoostingMetric):
@@ -171,6 +177,7 @@ class MultiClassMinorityBoostMetric(MinorityBoostingMetric):
         boost_numbers,
         ml_metric="roc_auc",
         drop_columns=None,
+        client=None,
     ):
         super().__init__(
             df_train=df_train,
@@ -178,6 +185,7 @@ class MultiClassMinorityBoostMetric(MinorityBoostingMetric):
             target_column=target_column,
             ml_metric=ml_metric,
             drop_columns=drop_columns,
+            client=client,
         )
         self.boost_numbers = boost_numbers
         self.minority_classes = minority_classes
@@ -190,4 +198,4 @@ class MultiClassMinorityBoostMetric(MinorityBoostingMetric):
         record_handler = model.create_record_handler_obj(data_source=seeds, params={"num_records": len(seeds)})
         record_handler.submit()
         gretel.helpers.poll(record_handler, verbose=False)
-        return pd.read_csv(record_handler.get_artifact_link("data"), compression="gzip")
+        return self._get_synthetic_data(record_handler)

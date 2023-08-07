@@ -126,7 +126,7 @@ def measure_ml_utility(
 
     best_params = grid_search[np.argmax(param_scores)]
     logger.info(
-        "ML utility - Grid search complete. RF hyperparameters:\n"
+        "ML utility - Grid search complete -> RF hyperparameters:\n"
         + tabulate(pd.DataFrame(best_params, index=[0]), headers="keys", tablefmt="grid", showindex=False)
         + "\n"
     )
