@@ -1,7 +1,7 @@
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import gretel_client as gretel
 import pandas as pd
@@ -58,9 +58,20 @@ class SDMetricsScore(BaseTunerMetric):
         "other": "categorical",
     }
 
-    def __init__(self, df_real: pd.DataFrame, client: Optional[Any] = None):
+    def __init__(self, df_real: pd.DataFrame, client: Optional[Any] = None, metadata: Optional[Dict[str, str]] = None):
         super().__init__(client)
         self.df_real = df_real.copy()
+        self.metadata = metadata
+
+    def _get_metadata(self, model: gretel.projects.models.Model):
+        gretel_report = self._get_gretel_report(model)
+        metadata = {
+            "columns": {
+                f["name"]: {"sdtype": self._gretel_to_sdtype[f["left_field_features"]["type"]]}
+                for f in gretel_report["fields"]
+            }
+        }
+        return metadata
 
     def _get_synthetic_data(self, model: gretel.projects.models.Model) -> pd.DataFrame:
         tp = {"client": self.client} if self.client else {}
@@ -69,16 +80,10 @@ class SDMetricsScore(BaseTunerMetric):
         return df_synth
 
     def __call__(self, model: gretel.projects.models.Model):
-        gretel_report = self._get_gretel_report(model)
-        metadata = {
-            "columns": {
-                f["name"]: {"sdtype": self._gretel_to_sdtype[f["left_field_features"]["type"]]}
-                for f in gretel_report["fields"]
-            }
-        }
+        self.metadata = self.metadata or self._get_metadata(model)
         sdmetrics_report = QualityReport()
         df_synth = self._get_synthetic_data(model)
-        sdmetrics_report.generate(self.df_real, df_synth, metadata)
+        sdmetrics_report.generate(self.df_real, df_synth, self.metadata)
         return sdmetrics_report.get_score()
 
 
