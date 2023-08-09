@@ -99,6 +99,7 @@ def measure_ml_utility(
     param_scores = []
     grid_search = ParameterGrid(param_grid)
     skf = StratifiedKFold(n_splits=n_splits)
+
     for params in tqdm(grid_search, total=len(grid_search), desc=f"ML utility - Performing grid search{boost_desc}"):
         cv_scores = []
         for split_i, (train_index, test_index) in enumerate(skf.split(df_ref, df_ref[target_column])):
