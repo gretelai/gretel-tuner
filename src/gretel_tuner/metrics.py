@@ -16,6 +16,7 @@ __all__ = [
     "GretelSQSMetric",
     "SDMetricsScore",
     "BinaryMinorityBoostMetric",
+    "MLUtilityMetric",
     "MultiClassMinorityBoostMetric",
 ]
 
@@ -85,6 +86,28 @@ class SDMetricsScore(BaseTunerMetric):
         df_synth = self._get_synthetic_data(model)
         sdmetrics_report.generate(self.df_real, df_synth, self.metadata)
         return sdmetrics_report.get_score()
+
+
+class MLUtilityMetric:
+    def __init__(self, df_test, target_column, ml_metric="pr_auc", drop_columns=None, classifier="rf"):
+        self.df_test = df_test
+        self.ml_metric = ml_metric
+        self.drop_columns = drop_columns
+        self.classifier = classifier
+        self.target_column = target_column
+
+    def __call__(self, model: gretel.projects.models.Model):
+        df_synth = pd.read_csv(model.get_artifact_link("data_preview"), compression="gzip")
+
+        results = measure_ml_utility(
+            df_real=df_synth,
+            df_holdout=self.df_test,
+            target_column=self.target_column,
+            cv_metric=self.ml_metric,
+            classifier=self.classifier.lower(),
+        )
+
+        return results.get_scores()[self.ml_metric]
 
 
 class MinorityBoostingMetric(BaseTunerMetric):

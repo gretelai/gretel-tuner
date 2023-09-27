@@ -10,6 +10,7 @@ install_requires = [
     "smart-open>=5.2.1",
     "tabulate>=0.8.9",
     "tqdm>=4.65.0",
+    "xgboost>=2.0.0",
 ]
 
 setup(
