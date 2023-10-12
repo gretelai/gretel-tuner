@@ -76,6 +76,8 @@ def _check_steps_epochs(steps: Optional[int], epochs: Optional[int]) -> None:
 
 class GPTXConfigSampler(BaseConfigSampler):
     base_model_config: dict = Field(default=read_model_config("synthetics/natural-language"))
+
+    # hyperparameters
     epochs_choices: Optional[List[int]] = Field(default=None, gt=0)
     steps_choices: Optional[List[int]] = Field(default=[650, 700, 750, 800, 850, 900], gt=0)
     batch_size_choices: List[int] = Field(default=[4], gt=0)
@@ -84,6 +86,16 @@ class GPTXConfigSampler(BaseConfigSampler):
     lr_scheduler_choices: List[str] = Field(default=["linear"])
     learning_rate_range: Tuple[float, float] = Field(default=(1e-5, 1e-3), gt=0)
     weight_decay_range: Tuple[float, float] = Field(default=(0.001, 0.05), gt=0)
+
+    # generation parameters
+    generate_do_sample_choices: List[bool] = Field(default=[True])
+    generate_do_early_stopping_choices: List[bool] = Field(default=[True])
+    generate_maximum_text_length_choices: List[int] = Field(default=[512], gt=0)
+    generate_top_p_range: Tuple[float, float] = Field(default=(0.9, 0.9), gt=0)
+    generate_top_k_range: Tuple[int, int] = Field(default=(43, 43), ge=0)
+    generate_num_beams_range: Tuple[int, int] = Field(default=(1, 1), gt=0)
+    generate_typical_p_range: Tuple[float, float] = Field(default=(0.8, 0.8), gt=0)
+    generate_temperature_range: Tuple[float, float] = Field(default=(1.0, 1.0), gt=0)
 
     def _get_trial_config(self, trial: optuna.Trial) -> dict:
         epoch_trials = trial.suggest_categorical("epochs", choices=self.epochs_choices) if self.epochs_choices else None
@@ -98,6 +110,18 @@ class GPTXConfigSampler(BaseConfigSampler):
             lr_scheduler=trial.suggest_categorical("lr_scheduler", choices=self.lr_scheduler_choices),
             learning_rate=trial.suggest_float("learning_rate", *self.learning_rate_range, log=True),
             weight_decay=trial.suggest_float("weight_decay", *self.weight_decay_range, log=True),
+            do_sample=trial.suggest_categorical("do_sample", choices=self.generate_do_sample_choices),
+            do_early_stopping=trial.suggest_categorical(
+                "do_early_stopping", choices=self.generate_do_early_stopping_choices
+            ),
+            maximum_text_length=trial.suggest_categorical(
+                "maximum_text_length", choices=self.generate_maximum_text_length_choices
+            ),
+            top_p=trial.suggest_float("top_p", *self.generate_top_p_range),
+            top_k=trial.suggest_int("top_k", *self.generate_top_k_range),
+            num_beams=trial.suggest_int("num_beams", *self.generate_num_beams_range),
+            typical_p=trial.suggest_float("typical_p", *self.generate_typical_p_range),
+            temperature=trial.suggest_float("temperature", *self.generate_temperature_range),
         )
 
     def create_config(
@@ -108,6 +132,14 @@ class GPTXConfigSampler(BaseConfigSampler):
         lr_scheduler: str,
         learning_rate: float,
         weight_decay: float,
+        do_sample: bool,
+        do_early_stopping: bool,
+        maximum_text_length: int,
+        top_p: float,
+        top_k: int,
+        num_beams: int,
+        typical_p: float,
+        temperature: float,
         epochs: Optional[int] = None,
         steps: Optional[int] = None,
     ) -> dict:
@@ -121,4 +153,12 @@ class GPTXConfigSampler(BaseConfigSampler):
         c["models"][0]["gpt_x"]["lr_scheduler"] = lr_scheduler
         c["models"][0]["gpt_x"]["learning_rate"] = learning_rate
         c["models"][0]["gpt_x"]["weight_decay"] = weight_decay
+        c["models"][0]["gpt_x"]["generate"]["do_sample"] = do_sample
+        c["models"][0]["gpt_x"]["generate"]["do_early_stopping"] = do_early_stopping
+        c["models"][0]["gpt_x"]["generate"]["maximum_text_length"] = maximum_text_length
+        c["models"][0]["gpt_x"]["generate"]["top_p"] = top_p
+        c["models"][0]["gpt_x"]["generate"]["top_k"] = top_k
+        c["models"][0]["gpt_x"]["generate"]["num_beams"] = num_beams
+        c["models"][0]["gpt_x"]["generate"]["typical_p"] = typical_p
+        c["models"][0]["gpt_x"]["generate"]["temperature"] = temperature
         return c
